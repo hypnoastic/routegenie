@@ -6,8 +6,10 @@ import base64
 import warnings
 from pathlib import Path
 from dotenv import load_dotenv
+import googlemaps
+from datetime import datetime
+import threading
 
-# Load environment variables BEFORE importing the agent
 load_dotenv()
 
 from google.genai import types
@@ -16,29 +18,92 @@ from google.adk.runners import Runner
 from google.adk.agents import Agent, LiveRequestQueue
 from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.adk.sessions.in_memory_session_service import InMemorySessionService
+from google.adk.tools import FunctionTool
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
 from fastapi.websockets import WebSocketDisconnect
 
 warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
-# Application configuration
-APP_NAME = "gemini-live-voice-assistant"
+# Initialize Google Maps client
+gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
 
-# Initialize session service
+# Global route storage with thread lock
+route_lock = threading.Lock()
+latest_route_data = {}
+
+def get_directions(origin: str, destination: str, mode: str = "driving") -> str:
+    """
+    Get directions from origin to destination.
+    """
+    global latest_route_data
+    
+    try:
+        print(f"\n🗺️ 🔧 TOOL CALLED: get_directions('{origin}' → '{destination}')")
+        
+        directions = gmaps.directions(
+            origin,
+            destination,
+            mode=mode,
+            departure_time=datetime.now()
+        )
+        
+        if not directions:
+            return json.dumps({"error": "No route found"})
+        
+        route = directions[0]
+        leg = route['legs'][0]
+        
+        # Create result
+        result = {
+            "status": "success",
+            "origin": leg['start_address'],
+            "destination": leg['end_address'],
+            "distance": leg['distance']['text'],
+            "duration": leg['duration']['text'],
+            "polyline": route['overview_polyline']['points'],
+            "steps": []
+        }
+        
+        # Store globally for retrieval
+        with route_lock:
+            latest_route_data['current'] = result
+        
+        # Get steps
+        for step in leg['steps'][:3]:
+            result['steps'].append({
+                "instruction": step['html_instructions'].replace('<b>', '').replace('</b>', ''),
+                "distance": step['distance']['text'],
+                "duration": step['duration']['text']
+            })
+        
+        print(f"✅ ROUTE FOUND: {result['distance']}, {result['duration']}")
+        print(f"✅ Polyline length: {len(result['polyline'])} chars\n")
+        
+        return json.dumps(result)
+        
+    except Exception as e:
+        print(f"❌ Tool Error: {str(e)}\n")
+        return json.dumps({"status": "error", "error": str(e)})
+
+# Create tool
+directions_tool = FunctionTool(func=get_directions)
+
+APP_NAME = "gemini-maps-assistant"
 session_service = InMemorySessionService()
 
-# Define the agent
 root_agent = Agent(
-    name="voice_assistant",
+    name="maps_assistant",
     model=os.getenv("DEMO_AGENT_MODEL", "gemini-2.0-flash-exp"),
-    description="A helpful voice assistant.",
-    instruction="You are a helpful AI assistant. Respond naturally and conversationally to user queries.",
+    description="Navigation assistant using Google Maps.",
+    instruction="""You are a navigation assistant. When users ask for directions:
+1. Use get_directions tool to find the route
+2. Respond with one SHORT sentence: "Route found: [distance] in [duration]"
+3. Be conversational and brief.
+""",
+    tools=[directions_tool]
 )
 
-# Initialize runner once at module level (production pattern)
 runner = Runner(
     app_name=APP_NAME,
     agent=root_agent,
@@ -47,7 +112,6 @@ runner = Runner(
 
 async def start_agent_session(user_id, is_audio=False):
     """Starts an ADK agent session"""
-    # Get or create session
     session_id = f"{APP_NAME}_{user_id}"
     session = await runner.session_service.get_session(
         app_name=APP_NAME,
@@ -62,25 +126,18 @@ async def start_agent_session(user_id, is_audio=False):
             session_id=session_id,
         )
     
-    # Detect native audio models
     model_name = root_agent.model if isinstance(root_agent.model, str) else root_agent.model.model
     is_native_audio = "native-audio" in model_name.lower()
-    
-    # Configure response modality
     modality = "AUDIO" if (is_audio or is_native_audio) else "TEXT"
     
-    # Configure run settings - NO TRANSCRIPTION
     run_config = RunConfig(
         streaming_mode=StreamingMode.BIDI,
         response_modalities=[modality],
         session_resumption=types.SessionResumptionConfig(),
-        # REMOVED: output_audio_transcription - no text transcripts needed
     )
     
-    # Create LiveRequestQueue in async context
     live_request_queue = LiveRequestQueue()
     
-    # Start streaming session
     live_events = runner.run_live(
         user_id=user_id,
         session_id=session.id,
@@ -90,65 +147,96 @@ async def start_agent_session(user_id, is_audio=False):
     
     return live_events, live_request_queue
 
-async def agent_to_client_messaging(websocket, live_events):
-    """Agent to client communication - AUDIO ONLY"""
+async def agent_to_client_messaging(websocket, live_events, user_id):
+    """Agent to client communication"""
+    global latest_route_data
+    
     try:
+        turn_counter = 0
+        
         async for event in live_events:
-            # Read the Content and its first Part
             part: Part = (
                 event.content and event.content.parts and event.content.parts[0]
             )
             
             if part:
-                # Handle audio data only
+                # Handle audio data
                 is_audio = part.inline_data and part.inline_data.mime_type.startswith("audio/pcm")
                 if is_audio:
                     audio_data = part.inline_data and part.inline_data.data
                     if audio_data:
                         message = {
-                            "mime_type": "audio/pcm",
+                            "type": "audio",
                             "data": base64.b64encode(audio_data).decode("ascii")
                         }
                         await websocket.send_text(json.dumps(message))
-                        print(f"[AGENT TO CLIENT]: audio/pcm: {len(audio_data)} bytes.")
+                        print(f"[AUDIO SENT]: {len(audio_data)} bytes")
             
-            # Handle turn completion/interruption
-            if event.turn_complete or event.interrupted:
-                message = {
-                    "turn_complete": event.turn_complete,
-                    "interrupted": event.interrupted,
-                }
-                await websocket.send_text(json.dumps(message))
-                print(f"[AGENT TO CLIENT]: {message}")
+            # Handle turn completion
+            if event.turn_complete:
+                turn_counter += 1
+                print(f"\n{'='*60}")
+                print(f"✅ TURN #{turn_counter} COMPLETE")
+                print(f"{'='*60}")
+                
+                # CHECK ROUTE CACHE
+                with route_lock:
+                    route_data = latest_route_data.get('current')
+                
+                if route_data:
+                    print(f"✅ ROUTE DATA FOUND IN CACHE")
+                    print(f"   From: {route_data['origin']}")
+                    print(f"   To: {route_data['destination']}")
+                    print(f"   Distance: {route_data['distance']}")
+                    print(f"   Duration: {route_data['duration']}")
+                    
+                    # SEND ROUTE TO FRONTEND
+                    try:
+                        message = {
+                            "type": "route",
+                            "data": route_data
+                        }
+                        await websocket.send_text(json.dumps(message))
+                        print(f"✅ ROUTE SENT TO FRONTEND\n")
+                        
+                        # Clear cache after sending
+                        with route_lock:
+                            latest_route_data.pop('current', None)
+                    except Exception as e:
+                        print(f"❌ Error sending route: {e}\n")
+                else:
+                    print(f"⚠️  NO ROUTE DATA IN CACHE\n")
+                
+                # Send turn complete
+                try:
+                    await websocket.send_text(json.dumps({"type": "turn_complete"}))
+                except:
+                    pass
                 
     except WebSocketDisconnect:
-        print("Client disconnected from agent_to_client_messaging")
+        print(f"❌ Client {user_id} disconnected")
     except Exception as e:
-        print(f"Error in agent_to_client_messaging: {e}")
+        print(f"❌ Error in agent_to_client_messaging: {e}")
+        import traceback
+        traceback.print_exc()
 
-async def client_to_agent_messaging(websocket, live_request_queue):
-    """Client to agent communication - AUDIO ONLY"""
+async def client_to_agent_messaging(websocket, live_request_queue, user_id):
+    """Client to agent communication"""
     try:
         while True:
             message_json = await websocket.receive_text()
             message = json.loads(message_json)
-            mime_type = message["mime_type"]
-            data = message["data"]
             
-            if mime_type == "audio/pcm":
-                # Send audio in realtime mode
-                decoded_data = base64.b64decode(data)
-                live_request_queue.send_realtime(Blob(data=decoded_data, mime_type=mime_type))
-                print(f"[CLIENT TO AGENT]: audio/pcm: {len(decoded_data)} bytes")
-            else:
-                print(f"Unsupported mime type: {mime_type}")
+            if message.get("type") == "audio":
+                decoded_data = base64.b64decode(message["data"])
+                live_request_queue.send_realtime(Blob(data=decoded_data, mime_type="audio/pcm"))
                 
     except WebSocketDisconnect:
-        print("Client disconnected from client_to_agent_messaging")
+        print(f"Client {user_id} disconnected")
     except Exception as e:
         print(f"Error in client_to_agent_messaging: {e}")
 
-# FastAPI web app
+# FastAPI app
 app = FastAPI()
 
 app.add_middleware(
@@ -159,48 +247,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STATIC_DIR = Path("static")
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
 @app.get("/")
 async def root():
-    if (STATIC_DIR / "index.html").exists():
-        return FileResponse(STATIC_DIR / "index.html")
-    return {"message": "Gemini Live Voice Assistant API (Audio Only)", "status": "running"}
+    return {"message": "Gemini Maps Voice Assistant", "status": "running"}
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: int, is_audio: str):
-    """WebSocket endpoint for bidirectional audio streaming"""
+    """WebSocket endpoint"""
     await websocket.accept()
-    print(f"Client #{user_id} connected, audio mode: {is_audio}")
+    print(f"\n{'='*60}")
+    print(f"👤 CLIENT #{user_id} CONNECTED")
+    print(f"{'='*60}\n")
     
     user_id_str = str(user_id)
     live_events, live_request_queue = await start_agent_session(user_id_str, is_audio == "true")
     
-    # Run bidirectional messaging concurrently
     agent_to_client_task = asyncio.create_task(
-        agent_to_client_messaging(websocket, live_events)
+        agent_to_client_messaging(websocket, live_events, user_id_str)
     )
     client_to_agent_task = asyncio.create_task(
-        client_to_agent_messaging(websocket, live_request_queue)
+        client_to_agent_messaging(websocket, live_request_queue, user_id_str)
     )
     
     try:
-        # Wait for either task to complete
         tasks = [agent_to_client_task, client_to_agent_task]
         done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
         
-        # Check for errors in completed tasks
         for task in done:
-            if task.exception() is not None:
-                print(f"Task error for client #{user_id}: {task.exception()}")
-                import traceback
-                traceback.print_exception(type(task.exception()), task.exception(), task.exception().__traceback__)
+            if task.exception():
+                print(f"Task error: {task.exception()}")
     finally:
-        # Clean up resources
         live_request_queue.close()
-        print(f"Client #{user_id} disconnected")
+        print(f"\n❌ CLIENT #{user_id} DISCONNECTED\n")
 
 @app.get("/health")
 async def health():
@@ -209,10 +287,9 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     print("=" * 60)
-    print("🎙️  Gemini Live Voice Assistant (Audio Only)")
+    print("🗺️  Gemini Maps Voice Assistant")
     print("=" * 60)
     print(f"✅ Model: {root_agent.model}")
-    print(f"✅ Mode: Audio-to-Audio (No Transcription)")
     print(f"✅ Listening on: http://localhost:8000")
-    print("=" * 60)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    print("=" * 60 + "\n")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

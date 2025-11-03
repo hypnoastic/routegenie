@@ -1,56 +1,99 @@
-// App.js
 import React, { useState, useRef, useEffect } from 'react';
+import { GoogleMap, useJsApiLoader, Polyline, Marker } from '@react-google-maps/api';
 import './App.css';
+
+const libraries = ['places', 'geometry'];
+
+const mapContainerStyle = {
+  width: '100%',
+  height: '100vh'
+};
+
+const defaultCenter = {
+  lat: 37.7749,
+  lng: -122.4194
+};
 
 function App() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isOverlayOpen, setIsOverlayOpen] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
-  const [status, setStatus] = useState('Click microphone to start');
+  const [status, setStatus] = useState('');
+  const [routeData, setRouteData] = useState(null);
+  const [map, setMap] = useState(null);
+  const [center, setCenter] = useState(defaultCenter);
   
   const wsRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioContextRef = useRef(null);
   const processorRef = useRef(null);
+  const overlayRef = useRef(null);
+
+  const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+  console.log('Google Maps API Key loaded:', googleMapsApiKey ? '✅' : '❌');
+
+  const { isLoaded } = useJsApiLoader({
+    googleMapsApiKey: googleMapsApiKey,
+    libraries
+  });
 
   useEffect(() => {
-    connectWebSocket();
-    
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+    const handleClickOutside = (event) => {
+      if (overlayRef.current && !overlayRef.current.contains(event.target) && isOverlayOpen) {
+        closeOverlay();
       }
     };
-  }, []);
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOverlayOpen]);
+
+  const openOverlay = () => {
+    setIsOverlayOpen(true);
+    connectWebSocket();
+  };
+
+  const closeOverlay = () => {
+    setIsOverlayOpen(false);
+    stopRecording();
+    if (wsRef.current) {
+      wsRef.current.close();
+    }
+    setIsConnected(false);
+    setStatus('');
+  };
 
   const connectWebSocket = () => {
     const userId = Math.floor(Math.random() * 10000);
     wsRef.current = new WebSocket(`ws://localhost:8000/ws/${userId}?is_audio=true`);
     
     wsRef.current.onopen = () => {
-      console.log('✅ Connected to Gemini ADK backend');
+      console.log('✅ Connected to backend');
       setIsConnected(true);
-      setStatus('Connected - Ready to talk');
+      setStatus('Connected - Tap to speak');
     };
     
     wsRef.current.onmessage = async (event) => {
       const data = JSON.parse(event.data);
+      console.log('📨 Message type:', data.type);
       
-      // Handle audio data only
-      if (data.mime_type === 'audio/pcm') {
+      if (data.type === 'audio') {
+        console.log('🔊 Playing audio chunk');
         const audioData = base64ToArrayBuffer(data.data);
         await playAudioChunk(audioData);
-        setStatus('🔊 Playing AI response...');
+        setStatus('🔊 AI responding...');
       }
-      // Handle turn completion
-      else if (data.turn_complete) {
-        setStatus('Response complete - Ready for next input');
+      else if (data.type === 'route') {
+        console.log('✅ ROUTE DATA RECEIVED:', data.data);
+        setRouteData(data.data);
+        setStatus('Displaying route...');
+        displayRoute(data.data);
+        setTimeout(() => closeOverlay(), 3000);
       }
-      // Handle interruption
-      else if (data.interrupted) {
-        setStatus('Interrupted - Ready to talk');
+      else if (data.type === 'turn_complete') {
+        console.log('✅ Turn complete');
+        setStatus('Ready');
       }
     };
     
@@ -61,10 +104,70 @@ function App() {
     };
     
     wsRef.current.onclose = () => {
-      console.log('Disconnected');
+      console.log('❌ Disconnected');
       setIsConnected(false);
-      setStatus('Disconnected');
     };
+  };
+
+  const displayRoute = (route) => {
+    console.log('🗺️ displayRoute called');
+    console.log('Route data:', route);
+    
+    if (!route) {
+      console.error('❌ Route is null');
+      return;
+    }
+    
+    if (!window.google) {
+      console.error('❌ Google not loaded');
+      return;
+    }
+    
+    if (!map) {
+      console.error('❌ Map not initialized');
+      return;
+    }
+
+    try {
+      if (!route.polyline) {
+        console.error('❌ No polyline in route');
+        return;
+      }
+      
+      const decodedPath = window.google.maps.geometry.encoding.decodePath(route.polyline);
+      console.log('✅ Decoded polyline:', decodedPath.length, 'points');
+      
+      if (decodedPath.length === 0) {
+        console.error('❌ Decoded path is empty');
+        return;
+      }
+
+      setRouteData(prev => ({
+        ...prev,
+        ...route,
+        decodedPath: decodedPath
+      }));
+
+      const bounds = new window.google.maps.LatLngBounds();
+      decodedPath.forEach(point => bounds.extend(point));
+
+      if (decodedPath.length > 0) {
+        setCenter(decodedPath[0]);
+      }
+
+      setTimeout(() => {
+        map.fitBounds(bounds, {
+          top: 50,
+          right: 50,
+          bottom: 200,
+          left: 50
+        });
+        console.log('✅ Map bounds fitted');
+      }, 100);
+      
+    } catch (error) {
+      console.error('❌ Error displaying route:', error);
+    }
   };
 
   const startRecording = async () => {
@@ -99,7 +202,7 @@ function App() {
           const base64Audio = arrayBufferToBase64(pcm16.buffer);
           
           wsRef.current.send(JSON.stringify({
-            mime_type: 'audio/pcm',
+            type: 'audio',
             data: base64Audio
           }));
         }
@@ -111,7 +214,7 @@ function App() {
       processorRef.current = processor;
       mediaRecorderRef.current = stream;
       setIsRecording(true);
-      setStatus('🎤 Recording... Speak now');
+      setStatus('🎤 Listening... Ask for directions');
       
     } catch (error) {
       console.error('Error accessing microphone:', error);
@@ -130,7 +233,7 @@ function App() {
       mediaRecorderRef.current = null;
       processorRef.current = null;
       setIsRecording(false);
-      setStatus('⏳ Waiting for AI response...');
+      setStatus('Processing...');
     }
   };
 
@@ -209,37 +312,112 @@ function App() {
     return bytes.buffer;
   };
 
+  if (!isLoaded) {
+    return <div className="loading">🗺️ Loading Maps...</div>;
+  }
+
   return (
-    <div className="App">
-      <div className="container">
-        <h1>🎙️ Gemini Live Voice Assistant</h1>
-        <p className="subtitle">Audio-Only Mode (No Transcription)</p>
-        
-        <div className="status-container">
-          <div className={`status-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
-            {isConnected ? '🟢' : '🔴'}
-          </div>
-          <p className="status-text">{status}</p>
+    <div className="app-container">
+      {/* Full-screen Google Map */}
+      <GoogleMap
+        mapContainerStyle={mapContainerStyle}
+        center={center}
+        zoom={13}
+        onLoad={setMap}
+        options={{
+          zoomControl: true,
+          streetViewControl: false,
+          mapTypeControl: false,
+          fullscreenControl: false,
+          gestureHandling: 'greedy'
+        }}
+      >
+        {/* Draw route polyline */}
+        {routeData && routeData.decodedPath && (
+          <>
+            {/* Blue polyline for the route */}
+            <Polyline
+              path={routeData.decodedPath}
+              geodesic={true}
+              options={{
+                strokeColor: '#1f88e5',
+                strokeOpacity: 0.8,
+                strokeWeight: 5,
+                zIndex: 2
+              }}
+            />
+            
+            {/* Start marker */}
+            <Marker
+              position={routeData.decodedPath[0]}
+              title="Start"
+              options={{
+                icon: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
+              }}
+            />
+            
+            {/* End marker */}
+            <Marker
+              position={routeData.decodedPath[routeData.decodedPath.length - 1]}
+              title="End"
+              options={{
+                icon: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png'
+              }}
+            />
+          </>
+        )}
+      </GoogleMap>
+
+      {/* Route info box */}
+      {routeData && (
+        <div className="route-info-box">
+          <h3>{routeData.origin} → {routeData.destination}</h3>
+          <p>📍 {routeData.distance}</p>
+          <p>⏱️ {routeData.duration}</p>
         </div>
-        
-        <div className="controls">
-          <button 
-            className={`mic-button ${isRecording ? 'recording' : ''}`}
-            onClick={toggleRecording}
-            disabled={!isConnected}
-          >
-            <span className="mic-icon">{isRecording ? '⏹️' : '🎤'}</span>
-            <span className="mic-text">
-              {isRecording ? 'Stop Talking' : 'Start Talking'}
-            </span>
-          </button>
-        </div>
-        
-        <div className="info">
-          <p>💡 Click microphone and speak naturally</p>
-          <p>🔊 Gemini responds with audio only</p>
+      )}
+
+      {/* Floating Input Bar */}
+      <div className="floating-input-bar" onClick={openOverlay}>
+        <div className="input-bar-content">
+          <span className="mic-icon-small">🎤</span>
+          <span className="input-placeholder">Ask for directions...</span>
         </div>
       </div>
+
+      {/* AI Overlay */}
+      {isOverlayOpen && (
+        <div className="overlay-backdrop">
+          <div className="ai-overlay" ref={overlayRef}>
+            <button className="close-button" onClick={closeOverlay}>×</button>
+            
+            <h2>🗺️ Navigation Assistant</h2>
+            
+            <div className="status-display">
+              <div className={`connection-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
+                {isConnected ? '🟢' : '🔴'}
+              </div>
+              <p>{status || 'Connecting...'}</p>
+            </div>
+
+            <button 
+              className={`voice-button ${isRecording ? 'recording' : ''}`}
+              onClick={toggleRecording}
+              disabled={!isConnected}
+            >
+              <span className="mic-icon-large">{isRecording ? '⏹️' : '🎤'}</span>
+              <span className="button-text">
+                {isRecording ? 'Stop' : 'Tap to Speak'}
+              </span>
+            </button>
+
+            <div className="instructions">
+              <p>💡 Try: "Show me directions from Gurgaon to Rewari"</p>
+              <p>🚗 Or: "Route from here to airport"</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

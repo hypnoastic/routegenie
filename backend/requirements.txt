@@ -1,5 +1,6 @@
 # Core Google ADK
 google-adk==1.17.0
+googlemaps==4.10.0
 
 # Web Framework
 fastapi
