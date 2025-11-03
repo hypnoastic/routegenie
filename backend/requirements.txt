@@ -1,0 +1,12 @@
+# Core Google ADK
+google-adk==1.17.0
+
+# Web Framework
+fastapi
+uvicorn[standard]
+
+# Environment Variables
+python-dotenv
+
+# Optional: SSL Certificate Handling (if needed)
+certifi
