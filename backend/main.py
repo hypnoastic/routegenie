@@ -1,4 +1,3 @@
-# main.py
 import os
 import json
 import asyncio
@@ -62,7 +61,8 @@ def get_directions(origin: str, destination: str, mode: str = "driving") -> str:
             "distance": leg['distance']['text'],
             "duration": leg['duration']['text'],
             "polyline": route['overview_polyline']['points'],
-            "steps": []
+            "steps": [],
+            "stops": []
         }
         
         # Store globally for retrieval
@@ -86,8 +86,93 @@ def get_directions(origin: str, destination: str, mode: str = "driving") -> str:
         print(f"❌ Tool Error: {str(e)}\n")
         return json.dumps({"status": "error", "error": str(e)})
 
-# Create tool
+def find_nearby_stops(place_name: str, location: str, radius: int = 5000) -> str:
+    """
+    Find nearby places of a specific type near a location.
+    
+    Args:
+        place_name: Type of place (e.g., "McDonald's", "gas station", "restaurant")
+        location: The location to search around (address or coordinates)
+        radius: Search radius in meters (default 5000m = 5km)
+    
+    Returns:
+        JSON with nearby places information
+    """
+    try:
+        print(f"\n🔍 🔧 TOOL CALLED: find_nearby_stops('{place_name}' near '{location}')")
+        
+        # First geocode the location to get coordinates
+        geocode_result = gmaps.geocode(location)
+        
+        if not geocode_result:
+            return json.dumps({"error": f"Location '{location}' not found"})
+        
+        location_coords = geocode_result[0]['geometry']['location']
+        location_name = geocode_result[0]['formatted_address']
+        
+        print(f"📍 Location found: {location_name}")
+        
+        # Search for nearby places
+        try:
+            nearby_result = gmaps.places_nearby(
+                location=(location_coords['lat'], location_coords['lng']),
+                radius=radius,
+                keyword=place_name,
+                open_now=False
+            )
+            
+            if not nearby_result['results']:
+                return json.dumps({
+                    "error": f"No {place_name} found near {location_name}",
+                    "status": "not_found"
+                })
+            
+            stops = []
+            
+            # Get top 3 results
+            for place in nearby_result['results'][:3]:
+                stop_info = {
+                    "name": place.get('name', 'Unknown'),
+                    "address": place.get('vicinity', 'Address not available'),
+                    "lat": place['geometry']['location']['lat'],
+                    "lng": place['geometry']['location']['lng'],
+                    "distance": place.get('distance', 'N/A'),
+                    "rating": place.get('rating', 'N/A'),
+                    "open_now": place.get('opening_hours', {}).get('open_now', 'N/A')
+                }
+                stops.append(stop_info)
+            
+            result = {
+                "status": "success",
+                "place_type": place_name,
+                "location_searched": location_name,
+                "stops_found": len(stops),
+                "stops": stops
+            }
+            
+            print(f"✅ FOUND {len(stops)} stops")
+            for i, stop in enumerate(stops, 1):
+                print(f"   {i}. {stop['name']} - {stop['address']}")
+            print()
+            
+            # Store stops in route data
+            with route_lock:
+                if 'current' in latest_route_data:
+                    latest_route_data['current']['stops'] = stops
+            
+            return json.dumps(result)
+            
+        except Exception as e:
+            print(f"❌ Places search error: {str(e)}\n")
+            return json.dumps({"error": f"Error searching for places: {str(e)}"})
+        
+    except Exception as e:
+        print(f"❌ Tool Error: {str(e)}\n")
+        return json.dumps({"status": "error", "error": str(e)})
+
+# Create tools
 directions_tool = FunctionTool(func=get_directions)
+stops_tool = FunctionTool(func=find_nearby_stops)
 
 APP_NAME = "gemini-maps-assistant"
 session_service = InMemorySessionService()
@@ -98,10 +183,11 @@ root_agent = Agent(
     description="Navigation assistant using Google Maps.",
     instruction="""You are a navigation assistant. When users ask for directions:
 1. Use get_directions tool to find the route
-2. Respond with one SHORT sentence: "Route found: [distance] in [duration]"
-3. Be conversational and brief.
+2. If they mention stops/places they want to visit, use find_nearby_stops tool
+3. Respond with SHORT sentences: "Route found: [distance] in [duration]" and "Found [stop name] as a stop"
+4. Be conversational and brief.
 """,
-    tools=[directions_tool]
+    tools=[directions_tool, stops_tool]
 )
 
 runner = Runner(
@@ -189,6 +275,8 @@ async def agent_to_client_messaging(websocket, live_events, user_id):
                     print(f"   To: {route_data['destination']}")
                     print(f"   Distance: {route_data['distance']}")
                     print(f"   Duration: {route_data['duration']}")
+                    if route_data.get('stops'):
+                        print(f"   Stops: {len(route_data['stops'])}")
                     
                     # SEND ROUTE TO FRONTEND
                     try:
@@ -290,6 +378,7 @@ if __name__ == "__main__":
     print("🗺️  Gemini Maps Voice Assistant")
     print("=" * 60)
     print(f"✅ Model: {root_agent.model}")
+    print(f"✅ Tools: Directions, Nearby Stops")
     print(f"✅ Listening on: http://localhost:8000")
     print("=" * 60 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")

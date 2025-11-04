@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { GoogleMap, useJsApiLoader, Polyline, Marker } from '@react-google-maps/api';
+import { GoogleMap, useJsApiLoader, Polyline, Marker, InfoWindow } from '@react-google-maps/api';
 import './App.css';
 
 const libraries = ['places', 'geometry'];
@@ -22,6 +22,7 @@ function App() {
   const [routeData, setRouteData] = useState(null);
   const [map, setMap] = useState(null);
   const [center, setCenter] = useState(defaultCenter);
+  const [selectedStop, setSelectedStop] = useState(null);
   
   const wsRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -52,6 +53,9 @@ function App() {
   const openOverlay = () => {
     setIsOverlayOpen(true);
     connectWebSocket();
+    setTimeout(() => {
+      startRecording();
+    }, 300);
   };
 
   const closeOverlay = () => {
@@ -71,7 +75,7 @@ function App() {
     wsRef.current.onopen = () => {
       console.log('✅ Connected to backend');
       setIsConnected(true);
-      setStatus('Connected - Tap to speak');
+      setStatus('Listening...');
     };
     
     wsRef.current.onmessage = async (event) => {
@@ -82,12 +86,12 @@ function App() {
         console.log('🔊 Playing audio chunk');
         const audioData = base64ToArrayBuffer(data.data);
         await playAudioChunk(audioData);
-        setStatus('🔊 AI responding...');
+        setStatus('Playing response...');
       }
       else if (data.type === 'route') {
         console.log('✅ ROUTE DATA RECEIVED:', data.data);
         setRouteData(data.data);
-        setStatus('Displaying route...');
+        setStatus('Route displayed');
         displayRoute(data.data);
         setTimeout(() => closeOverlay(), 3000);
       }
@@ -214,11 +218,10 @@ function App() {
       processorRef.current = processor;
       mediaRecorderRef.current = stream;
       setIsRecording(true);
-      setStatus('🎤 Listening... Ask for directions');
       
     } catch (error) {
       console.error('Error accessing microphone:', error);
-      setStatus('❌ Microphone access denied');
+      setStatus('Microphone access denied');
     }
   };
 
@@ -233,15 +236,6 @@ function App() {
       mediaRecorderRef.current = null;
       processorRef.current = null;
       setIsRecording(false);
-      setStatus('Processing...');
-    }
-  };
-
-  const toggleRecording = () => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      startRecording();
     }
   };
 
@@ -313,7 +307,7 @@ function App() {
   };
 
   if (!isLoaded) {
-    return <div className="loading">🗺️ Loading Maps...</div>;
+    return <div className="loading">Loading...</div>;
   }
 
   return (
@@ -332,7 +326,6 @@ function App() {
           gestureHandling: 'greedy'
         }}
       >
-        {/* Draw route polyline */}
         {routeData && routeData.decodedPath && (
           <>
             {/* Blue polyline for the route */}
@@ -356,6 +349,29 @@ function App() {
               }}
             />
             
+            {/* Stop markers */}
+            {routeData.stops && routeData.stops.map((stop, idx) => (
+              <Marker
+                key={`stop-${idx}`}
+                position={{ lat: stop.lat, lng: stop.lng }}
+                title={stop.name}
+                onClick={() => setSelectedStop(stop)}
+                options={{
+                  icon: 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png'
+                }}
+              >
+                {selectedStop && selectedStop.name === stop.name && (
+                  <InfoWindow onCloseClick={() => setSelectedStop(null)}>
+                    <div className="info-window">
+                      <h4>{stop.name}</h4>
+                      <p>{stop.address}</p>
+                      {stop.rating && <p>⭐ {stop.rating}</p>}
+                    </div>
+                  </InfoWindow>
+                )}
+              </Marker>
+            ))}
+            
             {/* End marker */}
             <Marker
               position={routeData.decodedPath[routeData.decodedPath.length - 1]}
@@ -372,16 +388,50 @@ function App() {
       {routeData && (
         <div className="route-info-box">
           <h3>{routeData.origin} → {routeData.destination}</h3>
-          <p>📍 {routeData.distance}</p>
-          <p>⏱️ {routeData.duration}</p>
+          <div className="route-details">
+            <div className="detail-item">
+              <span className="detail-label">Distance</span>
+              <span className="detail-value">{routeData.distance}</span>
+            </div>
+            <div className="detail-item">
+              <span className="detail-label">Duration</span>
+              <span className="detail-value">{routeData.duration}</span>
+            </div>
+          </div>
+          
+          {/* Stops section */}
+          {routeData.stops && routeData.stops.length > 0 && (
+            <div className="stops-section">
+              <h4>Stops ({routeData.stops.length})</h4>
+              <div className="stops-list">
+                {routeData.stops.map((stop, idx) => (
+                  <div key={idx} className="stop-item">
+                    <div className="stop-marker">🟡</div>
+                    <div className="stop-info">
+                      <p className="stop-name">{stop.name}</p>
+                      <p className="stop-address">{stop.address}</p>
+                      {stop.rating && (
+                        <p className="stop-rating">⭐ {stop.rating}</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {/* Floating Input Bar */}
       <div className="floating-input-bar" onClick={openOverlay}>
         <div className="input-bar-content">
-          <span className="mic-icon-small">🎤</span>
-          <span className="input-placeholder">Ask for directions...</span>
+          <div className="search-icon-container">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2"/>
+              <path d="M12 12L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </div>
+          <span className="input-placeholder">Find your route</span>
         </div>
       </div>
 
@@ -389,31 +439,36 @@ function App() {
       {isOverlayOpen && (
         <div className="overlay-backdrop">
           <div className="ai-overlay" ref={overlayRef}>
-            <button className="close-button" onClick={closeOverlay}>×</button>
+            <button className="close-button" onClick={closeOverlay}>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+              </svg>
+            </button>
             
-            <h2>🗺️ Navigation Assistant</h2>
+            <div className="overlay-header">
+              <h2>RouteGenie</h2>
+              <p className="subtitle">Voice-powered navigation</p>
+            </div>
             
-            <div className="status-display">
-              <div className={`connection-indicator ${isConnected ? 'connected' : 'disconnected'}`}>
-                {isConnected ? '🟢' : '🔴'}
-              </div>
-              <p>{status || 'Connecting...'}</p>
+            <div className="connection-status">
+              <div className={`status-dot ${isConnected ? 'connected' : 'disconnected'}`}></div>
+              <p className="status-text">{status || 'Connecting...'}</p>
             </div>
 
-            <button 
-              className={`voice-button ${isRecording ? 'recording' : ''}`}
-              onClick={toggleRecording}
-              disabled={!isConnected}
-            >
-              <span className="mic-icon-large">{isRecording ? '⏹️' : '🎤'}</span>
-              <span className="button-text">
-                {isRecording ? 'Stop' : 'Tap to Speak'}
-              </span>
-            </button>
+            {/* Animated Voice Bars */}
+            <div className="voice-bars-container">
+              {Array.from({ length: 5 }, (_, index) => (
+                <div 
+                  key={index}
+                  className={`voice-bar ${isConnected && isRecording ? 'active' : 'dot'}`}
+                ></div>
+              ))}
+            </div>
 
             <div className="instructions">
-              <p>💡 Try: "Show me directions from Gurgaon to Rewari"</p>
-              <p>🚗 Or: "Route from here to airport"</p>
+              <p className="instruction-title">Try saying:</p>
+              <p className="instruction-example">Route from Gurgaon to Delhi with McDonald's stop</p>
+              <p className="instruction-subtitle">or ask for any two locations with stops</p>
             </div>
           </div>
         </div>
