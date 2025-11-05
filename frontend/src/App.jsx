@@ -92,7 +92,10 @@ function App() {
         console.log('✅ ROUTE DATA RECEIVED:', data.data);
         setRouteData(data.data);
         setStatus('Route displayed');
-        displayRoute(data.data);
+        // Delay display to ensure map is ready
+        setTimeout(() => {
+          displayRoute(data.data);
+        }, 500);
         setTimeout(() => closeOverlay(), 3000);
       }
       else if (data.type === 'turn_complete') {
@@ -138,39 +141,140 @@ function App() {
         return;
       }
       
-      const decodedPath = window.google.maps.geometry.encoding.decodePath(route.polyline);
+      console.log('📍 Decoding polyline with', route.polyline.length, 'chars...');
+      
+      let decodedPath = [];
+      try {
+        decodedPath = window.google.maps.geometry.encoding.decodePath(route.polyline);
+      } catch (error) {
+        console.error('❌ Error decoding polyline:', error);
+        return;
+      }
+      
       console.log('✅ Decoded polyline:', decodedPath.length, 'points');
       
-      if (decodedPath.length === 0) {
-        console.error('❌ Decoded path is empty');
+      // Validate and filter coordinates
+      let validPoints = [];
+      for (let i = 0; i < decodedPath.length; i++) {
+        const point = decodedPath[i];
+        
+        // Check if point is valid (should be LatLng object or have lat/lng properties)
+        let lat, lng;
+        
+        if (point.lat && point.lng) {
+          lat = point.lat();
+          lng = point.lng();
+        } else if (point.latitude !== undefined && point.longitude !== undefined) {
+          lat = point.latitude;
+          lng = point.longitude;
+        } else if (Array.isArray(point)) {
+          lat = point[0];
+          lng = point[1];
+        } else {
+          console.warn(`⚠️ Invalid coordinate at index ${i}:`, point);
+          continue;
+        }
+        
+        // Validate latitude (-90 to 90) and longitude (-180 to 180)
+        if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+          validPoints.push(point);
+        } else {
+          console.warn(`⚠️ Out of bounds coordinate at ${i}:`, lat, lng);
+        }
+      }
+      
+      console.log('✅ Valid points after filtering:', validPoints.length);
+      
+      if (validPoints.length === 0) {
+        console.error('❌ No valid coordinates found');
         return;
       }
 
+      // Create bounds
+      const bounds = new window.google.maps.LatLngBounds();
+      
+      console.log('📊 Adding points to bounds...');
+      
+      // Add all polyline points
+      for (const point of validPoints) {
+        try {
+          bounds.extend(point);
+        } catch (error) {
+          console.warn('⚠️ Error extending bounds with point:', point, error);
+        }
+      }
+      
+      // Add stop if exists
+      if (route.stop) {
+        try {
+          const stopPoint = new window.google.maps.LatLng(route.stop.lat, route.stop.lng);
+          
+          // Validate stop coordinates
+          if (route.stop.lat >= -90 && route.stop.lat <= 90 && 
+              route.stop.lng >= -180 && route.stop.lng <= 180) {
+            bounds.extend(stopPoint);
+            console.log('✅ Stop added to bounds:', route.stop.lat, route.stop.lng);
+          } else {
+            console.warn('⚠️ Invalid stop coordinates:', route.stop.lat, route.stop.lng);
+          }
+        } catch (error) {
+          console.error('❌ Error adding stop to bounds:', error);
+        }
+      }
+      
+      // Check bounds validity
+      const boundsCenter = bounds.getCenter();
+      const boundsNE = bounds.getNorthEast();
+      const boundsSW = bounds.getSouthWest();
+      
+      console.log('📍 Bounds Center:', boundsCenter.lat(), boundsCenter.lng());
+      console.log('📍 Bounds NE:', boundsNE.lat(), boundsNE.lng());
+      console.log('📍 Bounds SW:', boundsSW.lat(), boundsSW.lng());
+
+      // Update route data with valid decoded path
       setRouteData(prev => ({
         ...prev,
         ...route,
-        decodedPath: decodedPath
+        decodedPath: validPoints
       }));
 
-      const bounds = new window.google.maps.LatLngBounds();
-      decodedPath.forEach(point => bounds.extend(point));
-
-      if (decodedPath.length > 0) {
-        setCenter(decodedPath[0]);
+      // Set center to first valid point
+      if (validPoints.length > 0) {
+        const firstPoint = validPoints[0];
+        let firstLat, firstLng;
+        
+        if (firstPoint.lat && firstPoint.lng) {
+          firstLat = firstPoint.lat();
+          firstLng = firstPoint.lng();
+        } else if (Array.isArray(firstPoint)) {
+          firstLat = firstPoint[0];
+          firstLng = firstPoint[1];
+        } else {
+          firstLat = firstPoint.latitude;
+          firstLng = firstPoint.longitude;
+        }
+        
+        setCenter({ lat: firstLat, lng: firstLng });
+        console.log('📍 Center set to first point:', firstLat, firstLng);
       }
 
+      // Fit bounds to map with proper delay
       setTimeout(() => {
-        map.fitBounds(bounds, {
-          top: 50,
-          right: 50,
-          bottom: 200,
-          left: 50
-        });
-        console.log('✅ Map bounds fitted');
-      }, 100);
+        try {
+          map.fitBounds(bounds, 40); // padding parameter
+          console.log('✅ Map bounds fitted successfully');
+        } catch (error) {
+          console.error('❌ Error fitting bounds:', error);
+          // Fallback: just set center and zoom
+          map.setCenter(bounds.getCenter());
+          map.setZoom(11);
+          console.log('⚠️ Used fallback center/zoom');
+        }
+      }, 200);
       
     } catch (error) {
       console.error('❌ Error displaying route:', error);
+      console.error(error.stack);
     }
   };
 
@@ -334,9 +438,10 @@ function App() {
               geodesic={true}
               options={{
                 strokeColor: '#1f88e5',
-                strokeOpacity: 0.8,
-                strokeWeight: 5,
-                zIndex: 2
+                strokeOpacity: 0.9,
+                strokeWeight: 6,
+                zIndex: 2,
+                clickable: false
               }}
             />
             
@@ -344,40 +449,51 @@ function App() {
             <Marker
               position={routeData.decodedPath[0]}
               title="Start"
+              icon={{
+                url: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png',
+                scaledSize: new window.google.maps.Size(32, 32)
+              }}
               options={{
-                icon: 'http://maps.google.com/mapfiles/ms/icons/green-dot.png'
+                zIndex: 1
               }}
             />
             
-            {/* Stop markers */}
-            {routeData.stops && routeData.stops.map((stop, idx) => (
+            {/* Single Stop marker */}
+            {routeData.stop && (
               <Marker
-                key={`stop-${idx}`}
-                position={{ lat: stop.lat, lng: stop.lng }}
-                title={stop.name}
-                onClick={() => setSelectedStop(stop)}
+                position={{ lat: routeData.stop.lat, lng: routeData.stop.lng }}
+                title={routeData.stop.name}
+                onClick={() => setSelectedStop(routeData.stop)}
+                icon={{
+                  url: 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png',
+                  scaledSize: new window.google.maps.Size(32, 32)
+                }}
                 options={{
-                  icon: 'http://maps.google.com/mapfiles/ms/icons/yellow-dot.png'
+                  zIndex: 3
                 }}
               >
-                {selectedStop && selectedStop.name === stop.name && (
+                {selectedStop && (
                   <InfoWindow onCloseClick={() => setSelectedStop(null)}>
                     <div className="info-window">
-                      <h4>{stop.name}</h4>
-                      <p>{stop.address}</p>
-                      {stop.rating && <p>⭐ {stop.rating}</p>}
+                      <h4>{selectedStop.name}</h4>
+                      <p>{selectedStop.address}</p>
+                      {selectedStop.rating && <p>⭐ {selectedStop.rating}</p>}
                     </div>
                   </InfoWindow>
                 )}
               </Marker>
-            ))}
+            )}
             
             {/* End marker */}
             <Marker
               position={routeData.decodedPath[routeData.decodedPath.length - 1]}
               title="End"
+              icon={{
+                url: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png',
+                scaledSize: new window.google.maps.Size(32, 32)
+              }}
               options={{
-                icon: 'http://maps.google.com/mapfiles/ms/icons/red-dot.png'
+                zIndex: 1
               }}
             />
           </>
@@ -387,35 +503,46 @@ function App() {
       {/* Route info box */}
       {routeData && (
         <div className="route-info-box">
-          <h3>{routeData.origin} → {routeData.destination}</h3>
-          <div className="route-details">
-            <div className="detail-item">
-              <span className="detail-label">Distance</span>
-              <span className="detail-value">{routeData.distance}</span>
+          {/* Source and Destination Section */}
+          <div className="route-locations">
+            <div className="location-item">
+              <span className="location-label">From</span>
+              <span className="location-name" title={routeData.origin}>{routeData.origin}</span>
             </div>
-            <div className="detail-item">
-              <span className="detail-label">Duration</span>
-              <span className="detail-value">{routeData.duration}</span>
+            <div className="location-item">
+              <span className="location-label">To</span>
+              <span className="location-name" title={routeData.destination}>{routeData.destination}</span>
             </div>
           </div>
           
-          {/* Stops section */}
-          {routeData.stops && routeData.stops.length > 0 && (
-            <div className="stops-section">
-              <h4>Stops ({routeData.stops.length})</h4>
-              <div className="stops-list">
-                {routeData.stops.map((stop, idx) => (
-                  <div key={idx} className="stop-item">
-                    <div className="stop-marker">🟡</div>
-                    <div className="stop-info">
-                      <p className="stop-name">{stop.name}</p>
-                      <p className="stop-address">{stop.address}</p>
-                      {stop.rating && (
-                        <p className="stop-rating">⭐ {stop.rating}</p>
-                      )}
-                    </div>
+          {/* Distance and Duration Display */}
+          <div className="route-metrics">
+            <div className="metric-container">
+              <span className="metric-label">Distance</span>
+              <span className="metric-value">{routeData.distance}</span>
+            </div>
+            <div className="metric-container">
+              <span className="metric-label">Duration</span>
+              <span className="metric-value">{routeData.duration}</span>
+            </div>
+          </div>
+          
+          {/* Single Stop Display */}
+          {routeData.stop && (
+            <div className="stop-section">
+              <div className="stop-header">
+                <span className="stop-icon">🟡</span>
+                <span className="stop-label">Stop</span>
+              </div>
+              <div className="stop-card-single">
+                <h5 className="stop-name" title={routeData.stop.name}>{routeData.stop.name}</h5>
+                <p className="stop-address" title={routeData.stop.address}>{routeData.stop.address}</p>
+                {routeData.stop.rating && (
+                  <div className="stop-rating">
+                    <span className="rating-star">⭐</span>
+                    <span className="rating-value">{routeData.stop.rating}</span>
                   </div>
-                ))}
+                )}
               </div>
             </div>
           )}
@@ -467,8 +594,8 @@ function App() {
 
             <div className="instructions">
               <p className="instruction-title">Try saying:</p>
-              <p className="instruction-example">Route from Gurgaon to Delhi with McDonald's stop</p>
-              <p className="instruction-subtitle">or ask for any two locations with stops</p>
+              <p className="instruction-example">Route from Gurgaon to Delhi with McDonald's</p>
+              <p className="instruction-subtitle">or ask for any two locations with a stop</p>
             </div>
           </div>
         </div>

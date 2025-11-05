@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import googlemaps
 from datetime import datetime
 import threading
+import polyline
 
 load_dotenv()
 
@@ -31,148 +32,223 @@ gmaps = googlemaps.Client(key=os.getenv("GOOGLE_MAPS_API_KEY"))
 route_lock = threading.Lock()
 latest_route_data = {}
 
-def get_directions(origin: str, destination: str, mode: str = "driving") -> str:
+def get_directions_with_stop(origin: str, destination: str, stop_place: str) -> str:
     """
-    Get directions from origin to destination.
+    Get directions from origin to destination with an optional stop.
+    Combines the stop into a single optimized route using waypoints.
+    
+    Args:
+        origin: Starting location
+        destination: Ending location
+        stop_place: Stop/waypoint place (e.g., "McDonald's", "gas station", or "none" for no stop)
+    
+    Returns:
+        Route information with polyline and stop details
     """
     global latest_route_data
     
     try:
-        print(f"\n🗺️ 🔧 TOOL CALLED: get_directions('{origin}' → '{destination}')")
+        print(f"\n🗺️ 🔧 TOOL CALLED: get_directions_with_stop('{origin}' → '{destination}' via '{stop_place}')")
         
-        directions = gmaps.directions(
-            origin,
-            destination,
-            mode=mode,
-            departure_time=datetime.now()
-        )
+        waypoints = []
+        stop_info = None
+        
+        # If stop is requested (not "none" or empty), find it and add as waypoint
+        if stop_place and stop_place.lower() != "none" and stop_place.strip():
+            print(f"🔍 Finding stop: {stop_place} near {origin}")
+            
+            try:
+                # Geocode the origin to get coordinates for nearby search
+                geocode_origin = gmaps.geocode(origin)
+                if not geocode_origin:
+                    print(f"⚠️ Could not geocode origin {origin}")
+                else:
+                    origin_coords = geocode_origin[0]['geometry']['location']
+                    
+                    # Find the stop location
+                    nearby_result = gmaps.places_nearby(
+                        location=(origin_coords['lat'], origin_coords['lng']),
+                        radius=5000,
+                        keyword=stop_place,
+                        open_now=False
+                    )
+                    
+                    if nearby_result.get('results') and len(nearby_result['results']) > 0:
+                        best_place = nearby_result['results'][0]
+                        
+                        stop_info = {
+                            "name": best_place.get('name', 'Unknown'),
+                            "address": best_place.get('vicinity', 'Address not available'),
+                            "lat": float(best_place['geometry']['location']['lat']),
+                            "lng": float(best_place['geometry']['location']['lng']),
+                            "rating": best_place.get('rating', None)
+                        }
+                        
+                        # Add as waypoint
+                        waypoints.append((stop_info['lat'], stop_info['lng']))
+                        
+                        print(f"✅ Stop found: {stop_info['name']}")
+                        print(f"   Coordinates: ({stop_info['lat']}, {stop_info['lng']})")
+                    else:
+                        print(f"⚠️ Stop '{stop_place}' not found, continuing without stop")
+            
+            except Exception as e:
+                print(f"⚠️ Error finding stop: {str(e)}")
+                import traceback
+                traceback.print_exc()
+        
+        # Get directions with or without waypoint
+        print(f"📍 Calculating route from {origin} to {destination}...")
+        
+        try:
+            # Build directions parameters
+            directions_params = {
+                'origin': origin,
+                'destination': destination,
+                'mode': 'driving',
+                'departure_time': datetime.now()
+            }
+            
+            # Add waypoints if we found a stop
+            if waypoints:
+                directions_params['waypoints'] = waypoints
+                directions_params['optimize_waypoints'] = True
+                print(f"🛣️ Using waypoints: {waypoints}")
+            
+            directions = gmaps.directions(**directions_params)
+            
+        except Exception as e:
+            print(f"❌ Directions API error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return json.dumps({"status": "error", "error": str(e)})
         
         if not directions:
+            print("❌ No route found")
             return json.dumps({"error": "No route found"})
         
         route = directions[0]
-        leg = route['legs'][0]
         
-        # Create result
+        # PROPERLY combine polylines: decode each leg separately, then combine coordinates
+        combined_coords = []
+        total_distance = 0
+        total_duration = 0
+        origin_address = ""
+        destination_address = ""
+        all_steps = []
+        
+        legs = route['legs']
+        print(f"📊 Processing {len(legs)} leg(s)...")
+        
+        for idx, leg in enumerate(legs):
+            print(f"   Leg {idx + 1}: {leg['start_address']} → {leg['end_address']}")
+            
+            if idx == 0:
+                origin_address = leg['start_address']
+            if idx == len(legs) - 1:
+                destination_address = leg['end_address']
+            
+            # Decode each leg's polyline separately
+            if 'overview_polyline' in leg and leg['overview_polyline'].get('points'):
+                try:
+                    # Decode the polyline for this leg
+                    leg_coords = polyline.decode(leg['overview_polyline']['points'])
+                    print(f"      ✅ Decoded {len(leg_coords)} points from overview polyline")
+                    
+                    # Add all coordinates from this leg
+                    combined_coords.extend(leg_coords)
+                except Exception as e:
+                    print(f"      ⚠️ Error decoding overview polyline: {e}")
+                    # Fall back to step polylines
+                    for step in leg['steps']:
+                        if 'polyline' in step and step['polyline'].get('points'):
+                            try:
+                                step_coords = polyline.decode(step['polyline']['points'])
+                                combined_coords.extend(step_coords)
+                            except:
+                                pass
+            else:
+                print(f"      ℹ️ No overview polyline, building from steps...")
+                # Build from individual steps
+                for step in leg['steps']:
+                    if 'polyline' in step and step['polyline'].get('points'):
+                        try:
+                            step_coords = polyline.decode(step['polyline']['points'])
+                            combined_coords.extend(step_coords)
+                        except Exception as e:
+                            print(f"      ⚠️ Error decoding step polyline: {e}")
+            
+            total_distance += leg['distance']['value']
+            total_duration += leg['duration']['value']
+            
+            # Collect steps
+            for step in leg['steps']:
+                html_text = step['html_instructions'].replace('<b>', '').replace('</b>', '').replace('<div style="margin-left: 20px">', '').replace('</div>', '')
+                all_steps.append({
+                    "instruction": html_text,
+                    "distance": step['distance']['text'],
+                    "duration": step['duration']['text']
+                })
+        
+        print(f"✅ Combined {len(combined_coords)} total coordinates")
+        
+        # Now encode the combined coordinates back to polyline
+        try:
+            combined_polyline = polyline.encode(combined_coords, 5)
+            print(f"✅ Re-encoded polyline: {len(combined_polyline)} chars")
+        except Exception as e:
+            print(f"⚠️ Error encoding polyline: {e}")
+            combined_polyline = ""
+        
+        # Convert to readable format
+        distance_km = total_distance / 1000
+        duration_hours = total_duration // 3600
+        duration_mins = (total_duration % 3600) // 60
+        
+        distance_text = f"{distance_km:.1f} km"
+        if duration_hours > 0:
+            duration_text = f"{int(duration_hours)}h {int(duration_mins)}m"
+        else:
+            duration_text = f"{int(duration_mins)}m"
+        
         result = {
             "status": "success",
-            "origin": leg['start_address'],
-            "destination": leg['end_address'],
-            "distance": leg['distance']['text'],
-            "duration": leg['duration']['text'],
-            "polyline": route['overview_polyline']['points'],
-            "steps": [],
-            "stops": []
+            "origin": origin_address,
+            "destination": destination_address,
+            "distance": distance_text,
+            "duration": duration_text,
+            "polyline": combined_polyline,
+            "steps": all_steps[:5]  # First 5 steps
         }
+        
+        # Add stop if found
+        if stop_info:
+            result["stop"] = stop_info
+            print(f"✅ Stop included in route: {stop_info['name']}")
         
         # Store globally for retrieval
         with route_lock:
             latest_route_data['current'] = result
         
-        # Get steps
-        for step in leg['steps'][:3]:
-            result['steps'].append({
-                "instruction": step['html_instructions'].replace('<b>', '').replace('</b>', ''),
-                "distance": step['distance']['text'],
-                "duration": step['duration']['text']
-            })
-        
-        print(f"✅ ROUTE FOUND: {result['distance']}, {result['duration']}")
-        print(f"✅ Polyline length: {len(result['polyline'])} chars\n")
+        print(f"✅ ROUTE COMPLETE")
+        print(f"   Distance: {distance_text}")
+        print(f"   Duration: {duration_text}")
+        print(f"   Polyline length: {len(combined_polyline)} chars")
+        if stop_info:
+            print(f"   Stop: {stop_info['name']}")
+        print()
         
         return json.dumps(result)
         
     except Exception as e:
         print(f"❌ Tool Error: {str(e)}\n")
+        import traceback
+        traceback.print_exc()
         return json.dumps({"status": "error", "error": str(e)})
 
-def find_nearby_stops(place_name: str, location: str, radius: int = 5000) -> str:
-    """
-    Find nearby places of a specific type near a location.
-    
-    Args:
-        place_name: Type of place (e.g., "McDonald's", "gas station", "restaurant")
-        location: The location to search around (address or coordinates)
-        radius: Search radius in meters (default 5000m = 5km)
-    
-    Returns:
-        JSON with nearby places information
-    """
-    try:
-        print(f"\n🔍 🔧 TOOL CALLED: find_nearby_stops('{place_name}' near '{location}')")
-        
-        # First geocode the location to get coordinates
-        geocode_result = gmaps.geocode(location)
-        
-        if not geocode_result:
-            return json.dumps({"error": f"Location '{location}' not found"})
-        
-        location_coords = geocode_result[0]['geometry']['location']
-        location_name = geocode_result[0]['formatted_address']
-        
-        print(f"📍 Location found: {location_name}")
-        
-        # Search for nearby places
-        try:
-            nearby_result = gmaps.places_nearby(
-                location=(location_coords['lat'], location_coords['lng']),
-                radius=radius,
-                keyword=place_name,
-                open_now=False
-            )
-            
-            if not nearby_result['results']:
-                return json.dumps({
-                    "error": f"No {place_name} found near {location_name}",
-                    "status": "not_found"
-                })
-            
-            stops = []
-            
-            # Get top 3 results
-            for place in nearby_result['results'][:3]:
-                stop_info = {
-                    "name": place.get('name', 'Unknown'),
-                    "address": place.get('vicinity', 'Address not available'),
-                    "lat": place['geometry']['location']['lat'],
-                    "lng": place['geometry']['location']['lng'],
-                    "distance": place.get('distance', 'N/A'),
-                    "rating": place.get('rating', 'N/A'),
-                    "open_now": place.get('opening_hours', {}).get('open_now', 'N/A')
-                }
-                stops.append(stop_info)
-            
-            result = {
-                "status": "success",
-                "place_type": place_name,
-                "location_searched": location_name,
-                "stops_found": len(stops),
-                "stops": stops
-            }
-            
-            print(f"✅ FOUND {len(stops)} stops")
-            for i, stop in enumerate(stops, 1):
-                print(f"   {i}. {stop['name']} - {stop['address']}")
-            print()
-            
-            # Store stops in route data
-            with route_lock:
-                if 'current' in latest_route_data:
-                    latest_route_data['current']['stops'] = stops
-            
-            return json.dumps(result)
-            
-        except Exception as e:
-            print(f"❌ Places search error: {str(e)}\n")
-            return json.dumps({"error": f"Error searching for places: {str(e)}"})
-        
-    except Exception as e:
-        print(f"❌ Tool Error: {str(e)}\n")
-        return json.dumps({"status": "error", "error": str(e)})
 
-# Create tools
-directions_tool = FunctionTool(func=get_directions)
-stops_tool = FunctionTool(func=find_nearby_stops)
+# Create tool
+directions_tool = FunctionTool(func=get_directions_with_stop)
 
 APP_NAME = "gemini-maps-assistant"
 session_service = InMemorySessionService()
@@ -180,14 +256,30 @@ session_service = InMemorySessionService()
 root_agent = Agent(
     name="maps_assistant",
     model=os.getenv("DEMO_AGENT_MODEL", "gemini-2.0-flash-exp"),
-    description="Navigation assistant using Google Maps.",
-    instruction="""You are a navigation assistant. When users ask for directions:
-1. Use get_directions tool to find the route
-2. If they mention stops/places they want to visit, use find_nearby_stops tool
-3. Respond with SHORT sentences: "Route found: [distance] in [duration]" and "Found [stop name] as a stop"
-4. Be conversational and brief.
+    description="Navigation assistant using Google Maps with optimized routes and stops.",
+    instruction="""You are a helpful navigation assistant. When users ask for directions:
+
+1. Extract the origin, destination, and any stops mentioned
+2. Call get_directions_with_stop with all three required parameters
+3. If no stop is mentioned, pass stop_place as "none"
+4. Respond with SHORT responses like "Route found: [distance] in [duration]"
+
+ALWAYS call the function with these exact parameters:
+- origin: Starting location (string)
+- destination: Ending location (string)  
+- stop_place: Stop name or "none" (string)
+
+Examples:
+- "Route from Delhi to Gurgaon with McDonald's"
+  → get_directions_with_stop(origin="Delhi", destination="Gurgaon", stop_place="McDonald's")
+  
+- "Directions from office to airport via Starbucks"
+  → get_directions_with_stop(origin="office", destination="airport", stop_place="Starbucks")
+
+- "Just directions to the mall"
+  → get_directions_with_stop(origin="current location", destination="mall", stop_place="none")
 """,
-    tools=[directions_tool, stops_tool]
+    tools=[directions_tool]
 )
 
 runner = Runner(
@@ -275,8 +367,10 @@ async def agent_to_client_messaging(websocket, live_events, user_id):
                     print(f"   To: {route_data['destination']}")
                     print(f"   Distance: {route_data['distance']}")
                     print(f"   Duration: {route_data['duration']}")
-                    if route_data.get('stops'):
-                        print(f"   Stops: {len(route_data['stops'])}")
+                    
+                    if route_data.get('stop'):
+                        print(f"   Stop: {route_data['stop']['name']}")
+                        print(f"   Stop Coords: ({route_data['stop']['lat']}, {route_data['stop']['lng']})")
                     
                     # SEND ROUTE TO FRONTEND
                     try:
@@ -329,7 +423,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -374,11 +468,18 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
-    print("=" * 60)
-    print("🗺️  Gemini Maps Voice Assistant")
-    print("=" * 60)
+    print("\n" + "="*60)
+    print("🗺️  ROUTEGENIE - VOICE NAVIGATION ASSISTANT")
+    print("="*60)
     print(f"✅ Model: {root_agent.model}")
-    print(f"✅ Tools: Directions, Nearby Stops")
-    print(f"✅ Listening on: http://localhost:8000")
-    print("=" * 60 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
+    print(f"✅ Tool: get_directions_with_stop")
+    print(f"✅ Frontend: http://localhost:3000")
+    print(f"✅ Backend: http://localhost:8000")
+    print("="*60 + "\n")
+    
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info"
+    )
