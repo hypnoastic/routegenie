@@ -468,18 +468,19 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
+    port = int(os.getenv("PORT", 8000))
     print("\n" + "="*60)
     print("🗺️  ROUTEGENIE - VOICE NAVIGATION ASSISTANT")
     print("="*60)
     print(f"✅ Model: {root_agent.model}")
     print(f"✅ Tool: get_directions_with_stop")
     print(f"✅ Frontend: {os.getenv('FRONTEND_URL', 'http://localhost:5173')}")
-    print(f"✅ Backend: http://localhost:8000")
+    print(f"✅ Backend: http://localhost:{port}")
     print("="*60 + "\n")
     
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info"
     )
