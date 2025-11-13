@@ -11,3 +11,4 @@ python-dotenv
 
 # Optional: SSL Certificate Handling (if needed)
 certifi
+polyline==2.0.0
