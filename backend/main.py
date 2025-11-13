@@ -423,7 +423,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=[os.getenv("FRONTEND_URL", "http://localhost:5173")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -473,7 +473,7 @@ if __name__ == "__main__":
     print("="*60)
     print(f"✅ Model: {root_agent.model}")
     print(f"✅ Tool: get_directions_with_stop")
-    print(f"✅ Frontend: http://localhost:3000")
+    print(f"✅ Frontend: {os.getenv('FRONTEND_URL', 'http://localhost:5173')}")
     print(f"✅ Backend: http://localhost:8000")
     print("="*60 + "\n")
     

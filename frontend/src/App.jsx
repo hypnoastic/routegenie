@@ -70,7 +70,9 @@ function App() {
 
   const connectWebSocket = () => {
     const userId = Math.floor(Math.random() * 10000);
-    wsRef.current = new WebSocket(`ws://localhost:8000/ws/${userId}?is_audio=true`);
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+    const wsUrl = backendUrl.replace('http', 'ws');
+    wsRef.current = new WebSocket(`${wsUrl}/ws/${userId}?is_audio=true`);
     
     wsRef.current.onopen = () => {
       console.log('✅ Connected to backend');
