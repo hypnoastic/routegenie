@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import base64
+import time
 import warnings
 from pathlib import Path
 from dotenv import load_dotenv
@@ -465,6 +466,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: int, is_audio: str):
 @app.get("/health")
 async def health():
     return {"status": "healthy"}
+
+@app.get("/keep-alive")
+async def keep_alive():
+    return {"status": "alive", "timestamp": int(time.time())}
 
 if __name__ == "__main__":
     import uvicorn
