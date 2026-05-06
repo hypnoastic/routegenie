@@ -407,7 +407,6 @@ class LiveSessionManager:
         ]
         if "native-audio" in model_name:
             response_modalities = ["AUDIO"]
-            tools = None
         config_kwargs: dict[str, Any] = {
             "response_modalities": response_modalities,
             "input_audio_transcription": {},
@@ -421,8 +420,7 @@ class LiveSessionManager:
             ),
             "system_instruction": LIVE_SYSTEM_INSTRUCTION,
         }
-        if tools is not None:
-            config_kwargs["tools"] = tools
+        config_kwargs["tools"] = tools
         return types.LiveConnectConfig(**config_kwargs)
 
     def _personalization_context(self) -> dict[str, Any]:

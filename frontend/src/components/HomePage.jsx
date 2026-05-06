@@ -221,6 +221,9 @@ export default function HomePage() {
   const routeResolvedRef = useRef(false);
   const routeAudioReceivedRef = useRef(false);
   const modalCloseTimerRef = useRef(null);
+  const playbackContextRef = useRef(null);
+  const playbackNextTimeRef = useRef(0);
+  const playbackSourcesRef = useRef(new Set());
 
   const isLoggedIn = Boolean(appState.user);
   const isDummySession = sessionMode === 'dummy';
@@ -257,6 +260,75 @@ export default function HomePage() {
   useEffect(() => {
     refreshMe();
   }, [refreshMe]);
+
+  const resetPlaybackAudio = useCallback(async () => {
+    playbackSourcesRef.current.forEach((source) => {
+      try {
+        source.stop();
+      } catch {
+        // ignore already-ended sources
+      }
+      try {
+        source.disconnect();
+      } catch {
+        // ignore disconnected sources
+      }
+    });
+    playbackSourcesRef.current.clear();
+    playbackNextTimeRef.current = 0;
+    if (playbackContextRef.current) {
+      try {
+        await playbackContextRef.current.close();
+      } catch {
+        // ignore close failures during teardown
+      }
+      playbackContextRef.current = null;
+    }
+  }, []);
+
+  const playAudioChunk = useCallback(
+    async (base64Data) => {
+      const audioData = base64ToArrayBuffer(base64Data);
+      let context = playbackContextRef.current;
+      if (!context || context.state === 'closed') {
+        context = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+        playbackContextRef.current = context;
+        playbackNextTimeRef.current = context.currentTime;
+      }
+      if (context.state === 'suspended') {
+        await context.resume();
+      }
+
+      const samples = new Int16Array(audioData);
+      const audioBuffer = context.createBuffer(1, samples.length, 24000);
+      const channel = audioBuffer.getChannelData(0);
+      for (let index = 0; index < samples.length; index += 1) {
+        channel[index] = samples[index] / 32768;
+      }
+
+      const source = context.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(context.destination);
+      playbackSourcesRef.current.add(source);
+      source.onended = () => {
+        playbackSourcesRef.current.delete(source);
+        try {
+          source.disconnect();
+        } catch {
+          // ignore teardown race
+        }
+      };
+
+      const startAt = Math.max(context.currentTime + 0.02, playbackNextTimeRef.current);
+      source.start(startAt);
+      playbackNextTimeRef.current = startAt + audioBuffer.duration;
+    },
+    [],
+  );
+
+  useEffect(() => () => {
+    resetPlaybackAudio();
+  }, [resetPlaybackAudio]);
 
   const openAuth = (mode = 'login') => {
     setAuthMode(mode);
@@ -495,6 +567,7 @@ export default function HomePage() {
     }
     wsRef.current = null;
     liveReadyRef.current = false;
+    resetPlaybackAudio();
   };
 
   const closeAfterLiveAudio = (delay = 2600) => {
@@ -522,6 +595,7 @@ export default function HomePage() {
 
   const startVoice = async () => {
     setPlannerError('');
+    await resetPlaybackAudio();
     setVoiceConnected(false);
     setVoicePhase('connecting');
     setStatus('Connecting');
@@ -934,21 +1008,6 @@ function floatToPcm16Base64(samples, inputSampleRate) {
     pcm16[index] = value < 0 ? value * 0x8000 : value * 0x7fff;
   }
   return arrayBufferToBase64(pcm16.buffer);
-}
-
-async function playAudioChunk(base64Data) {
-  const audioData = base64ToArrayBuffer(base64Data);
-  const context = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-  const samples = new Int16Array(audioData);
-  const audioBuffer = context.createBuffer(1, samples.length, 24000);
-  const channel = audioBuffer.getChannelData(0);
-  for (let index = 0; index < samples.length; index += 1) {
-    channel[index] = samples[index] / 32768;
-  }
-  const source = context.createBufferSource();
-  source.buffer = audioBuffer;
-  source.connect(context.destination);
-  source.start();
 }
 
 function base64ToArrayBuffer(base64) {
