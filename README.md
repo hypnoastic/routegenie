@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Google_Maps-4285F4?style=for-the-badge&logo=google-maps&logoColor=white" alt="Google Maps"/>
 </p>
 
-# RouteGenie
+# 🗺️ RouteGenie
 
 **Voice-First AI Navigation Assistant with Intelligent Stop Insertion**
 
@@ -14,7 +14,7 @@ RouteGenie is a cutting-edge voice-controlled navigation application that enable
 
 ---
 
-## Problem Statement
+## 🎯 Problem Statement
 
 Traditional navigation apps require manual text input to plan routes and add stops. This is:
 
@@ -26,21 +26,21 @@ Traditional navigation apps require manual text input to plan routes and add sto
 
 ---
 
-## Key Features
+## ✨ Key Features
 
 | Feature                        | Description                                                      |
 | ------------------------------ | ---------------------------------------------------------------- |
-| **Voice-First Navigation**  | Speak naturally: _"Route from Delhi to Gurgaon with McDonald's"_ |
-| **Gemini Live Integration** | Real-time bidirectional audio streaming with Google's latest AI  |
-| **Smart Stop Insertion**    | Automatically finds and adds stops as optimized waypoints        |
-| **Interactive Google Maps** | Full-screen map with polyline routes, markers, and info windows  |
-| **Real-Time Response**      | Audio responses streamed back with sub-second latency            |
-| **Google OAuth**            | Secure authentication with session persistence                   |
-| **Route History**           | PostgreSQL-backed storage of routes and user preferences         |
+| 🎙️ **Voice-First Navigation**  | Speak naturally: _"Route from Delhi to Gurgaon with McDonald's"_ |
+| 🤖 **Gemini Live Integration** | Real-time bidirectional audio streaming with Google's latest AI  |
+| 📍 **Smart Stop Insertion**    | Automatically finds and adds stops as optimized waypoints        |
+| 🗺️ **Interactive Google Maps** | Full-screen map with polyline routes, markers, and info windows  |
+| ⚡ **Real-Time Response**      | Audio responses streamed back with sub-second latency            |
+| 🔐 **Google OAuth**            | Secure authentication with session persistence                   |
+| 💾 **Route History**           | PostgreSQL-backed storage of routes and user preferences         |
 
 ---
 
-## System Architecture
+## 🏗️ System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -105,7 +105,7 @@ Traditional navigation apps require manual text input to plan routes and add sto
 
 ---
 
-## Data Flow
+## 🔄 Data Flow
 
 ```mermaid
 sequenceDiagram
@@ -150,7 +150,7 @@ sequenceDiagram
 
 ---
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 ### Frontend
 
@@ -194,7 +194,7 @@ sequenceDiagram
 
 ---
 
-## Core Technical Implementation
+## 🧠 Core Technical Implementation
 
 ### 1. Bidirectional Audio Streaming (Gemini Live)
 
@@ -281,7 +281,7 @@ with route_lock:
 
 ---
 
-## Getting Started
+## 🚀 Getting Started
 
 ### Prerequisites
 
@@ -363,7 +363,7 @@ VITE_BACKEND_URL=http://localhost:8000
 
 ---
 
-## Screenshots
+## 📸 Screenshots
 
 ### Voice Interaction Overlay
 
@@ -380,7 +380,7 @@ VITE_BACKEND_URL=http://localhost:8000
 
 ---
 
-## Performance
+## 📊 Performance
 
 | Metric                     | Value               |
 | -------------------------- | ------------------- |
@@ -392,7 +392,7 @@ VITE_BACKEND_URL=http://localhost:8000
 
 ---
 
-## Future Enhancements
+## 🔮 Future Enhancements
 
 - [ ] Multi-stop route planning (more than one waypoint)
 - [ ] Turn-by-turn navigation with real-time updates
@@ -403,16 +403,20 @@ VITE_BACKEND_URL=http://localhost:8000
 
 ---
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License.
 
 ---
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - [Google ADK](https://ai.google.dev/adk) for the Agent Development Kit
 - [Gemini Live](https://ai.google.dev/gemini-api/docs/live) for real-time audio streaming
 - [Google Maps Platform](https://developers.google.com/maps) for mapping APIs
 
 ---
+
+<p align="center">
+  Built with ❤️ using Gemini Live + Google ADK
+</p>
