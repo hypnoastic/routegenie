@@ -13,7 +13,6 @@ export default function VoiceModal({
   status,
   voicePhase,
   isConnected,
-  transcript,
   routeData,
   onStartVoice,
   onStopVoice,
@@ -25,7 +24,6 @@ export default function VoiceModal({
   }
 
   const preview = previewText(routeData);
-  const activeTranscript = transcript.slice(-5);
   const canStop = voicePhase === 'connecting' || voicePhase === 'listening';
   const isPlanning = voicePhase === 'processing';
   const connectionTone = error ? 'bad' : isConnected ? 'good' : voicePhase === 'connecting' ? 'pending' : 'bad';
@@ -73,22 +71,8 @@ export default function VoiceModal({
           <span>{voicePhase === 'listening' ? 'Pause when done' : voicePhase === 'processing' ? 'Waiting for Genie' : 'Use natural voice prompts'}</span>
         </div>
 
-        <div className="voice-side">
-          <div className="voice-transcript">
-            <div className="section-label">Transcript</div>
-            {activeTranscript.length === 0 ? (
-              <div className="empty-inline">Start speaking</div>
-            ) : (
-              activeTranscript.map((item, index) => (
-                <div key={`${item.role}-${index}-${item.final}`} className={`transcript-row transcript-row--${item.role}`}>
-                  <strong>{item.role === 'assistant' ? 'Genie' : 'You'}</strong>
-                  <span>{item.text}</span>
-                </div>
-              ))
-            )}
-          </div>
-
-          {routeData ? (
+        {routeData ? (
+          <div className="voice-side">
             <div className="voice-preview__card">
               <div className="voice-preview__icon">
                 <SparkIcon className="icon icon--sm" />
@@ -98,8 +82,8 @@ export default function VoiceModal({
                 <small>{`${routeData.duration_text} • ${routeData.distance_text}`}</small>
               </div>
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
 
         {error ? <div className="inline-error">{error}</div> : null}
       </div>

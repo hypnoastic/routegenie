@@ -300,24 +300,8 @@ class LiveSessionManager:
         if content.input_transcription and content.input_transcription.text:
             logger.info("Route Genie Live: input transcript received")
             self.input_transcript_parts.append(content.input_transcription.text)
-            events.append(
-                {
-                    "type": "transcript",
-                    "role": "user",
-                    "text": content.input_transcription.text,
-                    "final": content.input_transcription.finished,
-                }
-            )
         if content.output_transcription and content.output_transcription.text:
             logger.info("Route Genie Live: output transcript received")
-            events.append(
-                {
-                    "type": "transcript",
-                    "role": "assistant",
-                    "text": content.output_transcription.text,
-                    "final": content.output_transcription.finished,
-                }
-            )
         if content.model_turn and content.model_turn.parts:
             for part in content.model_turn.parts:
                 if part.inline_data and part.inline_data.mime_type.startswith("audio/pcm"):
@@ -328,9 +312,6 @@ class LiveSessionManager:
                             "data": base64.b64encode(part.inline_data.data).decode("ascii"),
                         }
                     )
-                if part.text:
-                    logger.info("Route Genie Live: output text received")
-                    events.append({"type": "assistant_text", "text": part.text})
         if content.turn_complete:
             logger.info("Route Genie Live: turn complete")
             events.append({"type": "turn_complete"})

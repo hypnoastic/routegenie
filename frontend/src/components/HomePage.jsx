@@ -184,7 +184,6 @@ export default function HomePage() {
   const [plannerError, setPlannerError] = useState('');
   const [routeData, setRouteData] = useState(null);
   const [activeComparisonId, setActiveComparisonId] = useState('route-0');
-  const [transcript, setTranscript] = useState([]);
   const [saveLoading, setSaveLoading] = useState(false);
   const [shareLoading, setShareLoading] = useState(false);
   const [configIssues, setConfigIssues] = useState([]);
@@ -396,12 +395,6 @@ export default function HomePage() {
           setStatus('Speaking');
           await playAudioChunk(message.data);
         }
-        if (message.type === 'assistant_text') {
-          setTranscript((current) => [...current, { role: 'assistant', text: message.text, final: true }]);
-        }
-        if (message.type === 'transcript') {
-          setTranscript((current) => [...current, message]);
-        }
         if (message.type === 'route') {
           routeResolvedRef.current = true;
           stopAudioCapture();
@@ -529,7 +522,6 @@ export default function HomePage() {
 
   const startVoice = async () => {
     setPlannerError('');
-    setTranscript([]);
     setVoiceConnected(false);
     setVoicePhase('connecting');
     setStatus('Connecting');
@@ -838,7 +830,6 @@ export default function HomePage() {
         isConnected={voiceConnected}
         isListening={isListening}
         audioLevel={audioLevel}
-        transcript={transcript}
         routeData={routeData}
         onStartVoice={startVoice}
         onStopVoice={stopVoice}
