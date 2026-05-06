@@ -66,6 +66,7 @@ class LiveSessionManager:
     async def connect(self) -> str:
         self.client = genai.Client(
             vertexai=self.settings.use_vertex_ai,
+            credentials=self.settings.vertex_credentials(),
             project=self.settings.google_cloud_project,
             location=self.settings.vertex_live_location,
             http_options=types.HttpOptions(api_version="v1beta1"),
@@ -144,6 +145,7 @@ class LiveSessionManager:
         events: list[dict[str, Any]] = []
         client = genai.Client(
             vertexai=self.settings.use_vertex_ai,
+            credentials=self.settings.vertex_credentials(),
             project=self.settings.google_cloud_project,
             location=self.settings.vertex_live_location,
             http_options=types.HttpOptions(api_version="v1beta1"),
@@ -180,6 +182,7 @@ class LiveSessionManager:
         events: list[dict[str, Any]] = []
         client = genai.Client(
             vertexai=self.settings.use_vertex_ai,
+            credentials=self.settings.vertex_credentials(),
             project=self.settings.google_cloud_project,
             location=self.settings.vertex_live_location,
             http_options=types.HttpOptions(api_version="v1beta1"),

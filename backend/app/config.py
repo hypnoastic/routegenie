@@ -1,6 +1,8 @@
+import json
 from functools import lru_cache
 from typing import Literal
 
+from google.oauth2 import service_account
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -26,6 +28,7 @@ class Settings(BaseSettings):
     google_cloud_location: str = Field(default="us-central1", alias="GOOGLE_CLOUD_LOCATION")
     google_cloud_text_location: str | None = Field(default=None, alias="GOOGLE_CLOUD_TEXT_LOCATION")
     google_cloud_live_location: str | None = Field(default=None, alias="GOOGLE_CLOUD_LIVE_LOCATION")
+    google_service_account_json: str | None = Field(default=None, alias="GOOGLE_SERVICE_ACCOUNT_JSON")
     use_vertex_ai: bool = Field(default=False, alias="USE_VERTEX_AI")
 
     google_maps_server_api_key: str | None = Field(default=None, alias="GOOGLE_MAPS_SERVER_API_KEY")
@@ -55,6 +58,15 @@ class Settings(BaseSettings):
     @property
     def vertex_live_location(self) -> str:
         return self.google_cloud_live_location or self.google_cloud_location or "us-central1"
+
+    def vertex_credentials(self):
+        if not self.google_service_account_json:
+            return None
+        info = json.loads(self.google_service_account_json)
+        return service_account.Credentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
 
     def runtime_validation_errors(self) -> list[str]:
         errors: list[str] = []

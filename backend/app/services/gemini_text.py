@@ -19,6 +19,7 @@ class GeminiTextService:
     def client(self):
         return genai.Client(
             vertexai=self.settings.use_vertex_ai,
+            credentials=self.settings.vertex_credentials(),
             project=self.settings.google_cloud_project,
             location=self.settings.vertex_text_location,
             http_options=types.HttpOptions(api_version="v1"),
