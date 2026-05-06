@@ -1,5 +1,6 @@
 import uvicorn
 
+from app.main import app
 from app.config import get_settings
 
 
