@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
@@ -14,6 +15,7 @@ from app.services.gemini_live import run_live_session
 
 
 settings = get_settings()
+logger = logging.getLogger("uvicorn.error")
 
 
 @asynccontextmanager
@@ -66,5 +68,9 @@ async def live_websocket(websocket: WebSocket, db: Session = Depends(get_db)):
     except WebSocketDisconnect:
         return
     except Exception as exc:
-        await websocket.send_json({"type": "error", "detail": str(exc)})
-        await websocket.close(code=1011)
+        logger.exception("Route Genie Live: websocket setup failed")
+        try:
+            await websocket.send_json({"type": "error", "detail": str(exc)})
+            await websocket.close(code=1011)
+        except Exception:
+            return

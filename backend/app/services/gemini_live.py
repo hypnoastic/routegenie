@@ -74,11 +74,12 @@ class LiveSessionManager:
         candidates = []
         primary = self.settings.gemini_live_model_primary
         fallback = self.settings.gemini_live_model_fallback
-        if primary and primary.startswith("gemini-live-"):
+        if primary:
             candidates.append(primary)
         candidates.append(fallback)
         for candidate in dict.fromkeys(candidates):
             try:
+                logger.info("Route Genie Live: attempting model %s", candidate)
                 config = self._live_config(candidate)
                 self.session = await asyncio.wait_for(
                     self.client.aio.live.connect(model=candidate, config=config).__aenter__(),
@@ -87,6 +88,7 @@ class LiveSessionManager:
                 self.live_model_name = candidate
                 return candidate
             except Exception as exc:
+                logger.warning("Route Genie Live: model %s failed during connect: %s", candidate, exc)
                 last_error = exc
                 continue
         detail = f"Unable to establish a Vertex Gemini Live session with the configured models"
@@ -472,9 +474,34 @@ async def run_live_session(websocket: WebSocket, db: Session, user) -> None:
 
     loop.set_exception_handler(_ignore_google_live_close_noise)
     manager = LiveSessionManager(websocket, db, user)
+    keepalive_active = True
+
+    async def _startup_keepalive() -> None:
+        sent_initial = False
+        while keepalive_active:
+            try:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "connecting",
+                            "status": "Connecting to live model",
+                        }
+                    )
+                )
+                sent_initial = True
+            except Exception:
+                return
+            await asyncio.sleep(2 if sent_initial else 0.5)
+
     logger.info("Route Genie Live: starting Vertex Live session")
-    await manager.connect()
-    logger.info("Route Genie Live: session ready %s", manager.live_model_name)
+    startup_keepalive_task = asyncio.create_task(_startup_keepalive())
+    try:
+        await manager.connect()
+        logger.info("Route Genie Live: session ready %s", manager.live_model_name)
+    finally:
+        keepalive_active = False
+        startup_keepalive_task.cancel()
+        await asyncio.gather(startup_keepalive_task, return_exceptions=True)
     await manager.close()
     manager.session = None
     await websocket.send_text(json.dumps({"type": "session_ready", "data": manager.build_live_session_response()}))
